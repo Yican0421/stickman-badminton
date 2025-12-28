@@ -475,7 +475,7 @@ window.addEventListener('keydown', e => {
         }
 
         // [技能] 小键盘 0
-        if(e.code === 'Numpad0') activateSkill(player2);
+        if(e.code === 'NumpadAdd') activateSkill(player2);
 
         // [移动] Up: 跳跃
         if(e.code === 'ArrowUp'){ 
@@ -598,127 +598,249 @@ let ai = {
 };
 
 function resetAI() {
-  ai.state = AI_STATE.IDLE; ai.baseX = W * 0.75; ai.targetX = ai.baseX; ai.predictedX = null; ai.interceptY = null; ai.willOut = false; 
-  ai.reactionTimer = 0; ai.errorOffset = 0; ai.recalcTimer = 0;
-  ai.serveDelay = 30 + Math.random() * 40; 
+  ai.state = AI_STATE.IDLE; 
+  ai.baseX = W * 0.75; 
+  ai.targetX = ai.baseX; 
+  ai.predictedX = null; 
+  ai.interceptY = null; 
+  ai.willOut = false; 
+  ai.reactionTimer = 0; 
+  ai.errorOffset = 0; 
+  ai.recalcTimer = 0;
+  
+  ai.serveDelay = 0; 
+  
+  // === 修复：确保发球目标点在界限(200px)之外 ===
+  const serviceLineDist = 200; // 必须与 update 中的限制一致
+  const netX = W / 2;
+
+  // 30% 概率站前场发(偷网前)，70% 概率站中后场发
+  let isFrontServe = Math.random() < 0.3;
+  
+  if (isFrontServe) {
+      // 目标点：发球线 + 10~60px (贴着线发)
+      // 之前是 +60，导致 AI 想走进禁区
+      ai.serveTargetX = netX + serviceLineDist + 10 + Math.random() * 50; 
+  } else {
+      // 目标点：后场
+      ai.serveTargetX = W - 100 - Math.random() * 100; 
+  }
+
   player2.charging = false; player2.chargeVal = 0;
 }
 
+// === AI 核心：带反弹的物理弹道预测 ===
+// === AI 核心：物理弹道预测 (修复乱跳问题) ===
+// === AI 核心：寻找空中截击点 ===
+// === AI 核心：物理弹道预测 (回滚优化版 + 防骗跳) ===
 function analyzeTrajectory(p2) {
-  if (shuttle.vx <= 0 && !shuttle.stuck) return null;
-  
+  if (shuttle.vx <= 0 && !shuttle.stuck && shuttle.x < W/2) return null;
+
   let timeSteps = 0;
-  // 模拟变量
-  let simX = shuttle.x, simY = shuttle.y, simVx = shuttle.vx, simVy = shuttle.vy;
+  let simX = shuttle.x, simY = shuttle.y;
+  let simVx = shuttle.vx, simVy = shuttle.vy;
   const groundY = H - 40; 
+  const bounceDamping = 0.75; 
   
-  let bestIntercept = null;
+  let bestIntercept = null; 
   let landingX = null;
-  
-  // 模拟未来 180 帧
-  while (simY < groundY && timeSteps < 180) { 
+
+  while (timeSteps < 200) { 
       simVy += worldGravity * 0.8; 
-      simVx *= 0.99; 
-      simX += simVx; 
-      simY += simVy; 
+      let drag = 0.996; simVx *= drag; simVy *= drag;
+      simX += simVx; simY += simVy; 
       timeSteps++;
 
-      // === 新增：AI 预测中的反弹逻辑 ===
-      // 天花板反弹
-      if (simY < 0) {
-          simY = 0;
-          simVy = -simVy * 0.8; // 模拟能量损耗
-      }
-      // 右墙反弹 (AI身后的墙)
-      if (simX > W) {
-          simX = W;
-          simVx = -simVx * 0.8;
-      }
-      // 左墙反弹 (网对面的墙，通常AI不需要预测这么远，但写上无妨)
-      if (simX < 0) {
-          simX = 0;
-          simVx = -simVx * 0.8;
-      }
-      // ==============================
+      if (simX < 0) { simX = 0; simVx = -simVx * bounceDamping; }
+      if (simX > W) { simX = W; simVx = -simVx * bounceDamping; }
+      if (simY < 0) { simY = 0; simVy = -simVy * bounceDamping; }
 
-      // 寻找截击点
+      if (simY >= groundY) { landingX = simX; break; }
+
       if (simX > W/2 + 20 && simX < W - 20) {
-          const smashZoneBottom = H * 0.6; 
-          const smashZoneTop = H/2 - 100;
           
-          if (simY > smashZoneTop && simY < smashZoneBottom) {
+          // === 核心修复：站立摸高线 ===
+          // 假设人高80，手长20，拍子30 -> y - 130 是站立能打到的极限高度
+          // 只有比这个还高，才值得去"截击"(起跳)
+          let standingReach = p2.y - 130;
+          if (p2.skillActive && p2.id === 'speed') standingReach = 999; // 飞行时逻辑不同
+
+          // 只有球在空中很高的地方，才算截击点
+          if (simY < standingReach) {
               const distToRun = Math.abs(simX - p2.x);
               const timeToRun = distToRun / p2.speed; 
               
-              if (timeToRun < timeSteps && bestIntercept === null) {
-                  bestIntercept = { x: simX, y: simY };
+              if (timeToRun < timeSteps) {
+                  // 记录最高点 (simY 越小越高)
+                  if (bestIntercept === null || simY < bestIntercept.y) {
+                      bestIntercept = { x: simX, y: simY };
+                  }
               }
           }
       }
   }
-  landingX = simX;
   
+  if (landingX === null) landingX = simX;
   return { landingX, intercept: bestIntercept };
 }
 
 function updateAI(){
   if(gameMode !== 'cpu') return;
   const settings = DIFFICULTY_SETTINGS[selectedDifficulty];
-  if (player2.swingAnim > 0) { player2.vx = 0; player2.charging = false; return; }
-  
+
+  // 1. 状态锁
+  if (player2.swingAnim > 0) { player2.vx = 0; return; }
+  if (Math.abs(player2.impactVx) > 2 && selectedDifficulty !== 'easy') {
+      player2.vx = (player2.impactVx > 0) ? -player2.speed : player2.speed;
+      return;
+  }
+
+  // 2. 发球逻辑 (保持不变)
   if(serving === 'player2' && shuttle.stuck){ 
-      if (ai.serveDelay > 0) { ai.serveDelay--; if (ai.serveDelay % 40 < 20) player2.x -= 0.5; else player2.x += 0.5; return; }
-      if(!player2.charging) { player2.charging = true; player2.chargeVal = 0; const serveType = Math.random(); ai.serveTargetPower = (serveType < 0.3) ? (0.25 + Math.random()*0.1) : (0.85 + Math.random()*0.15); }
-      let chargeRate = player2.chargeRate * settings.chargeSpeed; player2.chargeVal = Math.min(1, player2.chargeVal + chargeRate);
-      if(player2.chargeVal >= ai.serveTargetPower) { player2.charging = false; player2.swingAnim = 10; serve('player2', player2.chargeVal); player2.chargeVal = 0; resetAI(); }
+      if (Math.abs(player2.x - ai.serveTargetX) > 5) {
+          player2.vx = (player2.x < ai.serveTargetX) ? player2.speed : -player2.speed;
+          return; 
+      } 
+      player2.vx = 0; 
+      const distToNet = Math.abs(player2.x - W/2);
+      let servePower = 0.8;
+      if (distToNet < 200) servePower = 0.25; 
+      else servePower = (Math.random() < 0.4) ? 0.6 : 0.9;
+      player2.swingAnim = 10;
+      serve('player2', servePower);
+      resetAI();
       return; 
   }
-  const ballComing = shuttle.vx > 0;
-  if (!ballComing && !shuttle.stuck) { 
-      player2.charging = false; player2.chargeVal = 0; ai.predictedX = null; ai.smashIntent = false; 
-      if (player2.x < W/2 + 100) { let moveTarget = ai.baseX; if (Math.abs(player2.x - moveTarget) > 10) { player2.vx = (player2.x < moveTarget) ? player2.speed * 0.8 : -player2.speed * 0.8; } else { player2.vx = 0; } } else { player2.vx = 0; }
-      return; 
+
+  // 3. 预判逻辑
+  const isMyTurn = lastHitter !== 'player2';
+  const ballComing = isMyTurn && ((shuttle.vx > 0) || (shuttle.x > W/2)); 
+
+  if (ballComing) {
+      ai.recalcTimer++;
+      if (ai.predictedX === null || ai.recalcTimer > 10) {
+          const traj = analyzeTrajectory(player2);
+          if (traj) {
+              let target = traj.landingX; 
+              ai.interceptY = null;
+              
+              if (settings.intercept && traj.intercept) {
+                  target = traj.intercept.x;
+                  ai.interceptY = traj.intercept.y;
+              }
+
+              let maxError = settings.error; 
+              ai.errorOffset = (Math.random() - 0.5) * maxError;
+              ai.predictedX = target + ai.errorOffset;
+              ai.recalcTimer = 0;
+          }
+      }
+  } else { 
+      ai.predictedX = ai.baseX; 
+      ai.interceptY = null; 
   }
-  if (selectedDifficulty === 'hell' && ballComing) { ai.recalcTimer++; if (ai.recalcTimer > 5) { ai.predictedX = null; ai.recalcTimer = 0; } }
-  if (ballComing && ai.predictedX === null && shuttle.x > W/2 - 300) {
-      const traj = analyzeTrajectory(player2);
-      if (traj) {
-          let target = traj.landingX; ai.interceptY = null;
-          if (settings.intercept && traj.intercept) { target = traj.intercept.x - 10; ai.interceptY = traj.intercept.y; ai.smashIntent = true; } 
-          else { ai.smashIntent = false; }
-          let maxError = settings.error; ai.errorOffset = (Math.random() - 0.5) * maxError;
-          if (target > W - COURT_PADDING + 20) { let intelligence = (selectedDifficulty === 'easy') ? 0.5 : 1.0; if (Math.random() < intelligence) ai.willOut = true; else ai.willOut = false; } 
-          else { ai.willOut = false; ai.predictedX = target + ai.errorOffset; }
-          ai.reactionTimer = settings.reaction + Math.random() * 5;
+
+  // 4. 移动执行
+  let moveTarget = ai.predictedX;
+  if (moveTarget !== null) {
+      // 如果是去截击，稍微往后站一点(15px)，保证球在身前
+      if (ai.interceptY !== null) moveTarget += 15;
+      
+      moveTarget = clamp(moveTarget, W/2 + 40, W - 40);
+      let dist = moveTarget - player2.x;
+      let actualSpeed = player2.speed * settings.speedMult;
+      
+      if (Math.abs(dist) > 10) {
+          player2.vx = (dist > 0) ? actualSpeed : -actualSpeed;
+      } else {
+          player2.vx = 0;
       }
   }
-  let moveTarget = ai.baseX;
-  if (ballComing && ai.predictedX !== null) {
-      if (ai.reactionTimer > 0) { ai.reactionTimer--; moveTarget = player2.x; } 
-      else if (ai.willOut) { moveTarget = W - 80; } 
-      else { let offset = (player2.roleName === '力量型') ? 20 : 0; moveTarget = clamp(ai.predictedX + offset, W/2 + 40, W - 40); }
-  }
-  let actualSpeed = player2.speed * settings.speedMult;
-  let distToTarget = Math.abs(player2.x - moveTarget);
-  if (distToTarget > 10) { player2.vx = (player2.x < moveTarget) ? actualSpeed : -actualSpeed; } else { player2.vx = 0; }
-  
-  if (distToTarget > 60) { player2.charging = false; player2.chargeVal = 0; }
 
-  if (ai.smashIntent && ai.interceptY && player2.onGround && ballComing) { const distX = Math.abs(player2.x - shuttle.x); if (distX < 150 && shuttle.x < player2.x) { player2.vy = -player2.jumpPower; player2.onGround = false; } }
-  if (ai.willOut && shuttle.x > W - 100) { player2.charging = false; return; }
-  const dx = shuttle.x - player2.handX; const dy = shuttle.y - player2.handY; const dist = Math.hypot(dx, dy);
-  if (ballComing && shuttle.x > W/2 && dist < 400 && !player2.charging) { 
-      if (distToTarget < 60 || ai.smashIntent) { player2.charging = true; player2.chargeVal = 0; }
+  // === 5. 垂直移动 (修复：防骗跳逻辑) ===
+  
+  if (player2.id === 'speed' && player2.skillActive) {
+      // 极速型飞行
+      let targetY = shuttle.y + 40; 
+      let distY = targetY - player2.y;
+      player2.vy = distY * 0.15; 
+      if (player2.vy > 12) player2.vy = 12; if (player2.vy < -12) player2.vy = -12;
+  } 
+  else if (ai.interceptY !== null && ballComing) {
+      // 普通跳跃判定
+      let distToTarget = Math.abs(player2.x - ai.predictedX);
+      
+      // A. 水平必须到位 (误差 < 50)
+      if (distToTarget < 50) {
+          
+          let shouldJump = true;
+
+          // === B. 核心修复：临场防骗跳 ===
+          // 就算预测显示这球最高点很高，但如果此时球已经掉下来了(放网球)，千万别跳！
+          // p2.y - 120 是站立摸高点。如果球比这个低，说明站着就能打，跳了反而漏球。
+          if (shuttle.y > player2.y - 120) {
+              shouldJump = false;
+          }
+
+          // C. 额外检查：如果球离我还很远(水平距离)，也不要急着跳
+          if (Math.abs(shuttle.x - player2.x) > 100) {
+              shouldJump = false;
+          }
+
+          // 执行起跳
+          if (shouldJump) {
+              if (player2.onGround) {
+                  player2.vy = -player2.jumpPower; 
+                  player2.onGround = false;
+                  player2.jumpCount = 1;
+              } else if (player2.doubleJump && player2.jumpCount < 2 && player2.vy > 0) {
+                  // 二段跳只为了补救
+                  if (shuttle.y < player2.y - 50) {
+                      player2.vy = -player2.jumpPower * 0.9;
+                      player2.jumpCount = 2;
+                      createHitParticles(player2.x, player2.y + 40, '#fff', 8);
+                  }
+              }
+          }
+      }
   }
-  if (player2.charging) { let chargeRate = player2.chargeRate * settings.chargeSpeed; player2.chargeVal = Math.min(1, player2.chargeVal + chargeRate); }
-  let hitRange = player2.hitRange + 20;
-  if (dist <= hitRange && !shuttle.stuck && shuttle.x > W/2) {
-    let isHighEnough = shuttle.y < (H * 0.6); let canSmash = isHighEnough && !player2.onGround;
-    player2.charging = false; let power = player2.chargeVal > 0 ? player2.chargeVal : 0.5;
-    if (canSmash && ai.smashIntent) power = 1.0; 
-    else if (shuttle.y > H - 150) { power = (selectedDifficulty === 'easy') ? 0.6 : 0.95; ai.smashIntent = false; }
-    else { if (selectedDifficulty !== 'easy' && player2.roleName === '极速型' && Math.random() < 0.3) power = 0.15; ai.smashIntent = false; }
-    triggerSwing(player2, power); player2.chargeVal = 0; ai.smashIntent = false; ai.predictedX = null; ai.interceptY = null;
+
+  // 6. 击球逻辑 (保持不变)
+  const distToBall = Math.hypot(shuttle.x - player2.handX, shuttle.y - player2.handY);
+  const hitRange = player2.hitRange + 20; 
+
+  if (shuttle.x > W/2 && distToBall < hitRange && !shuttle.stuck && isMyTurn) {
+      let isHighEnough = shuttle.y < (H * 0.5); 
+      let canSmash = isHighEnough && !player2.onGround;
+      if (player2.skillActive && player2.id === 'speed') canSmash = true;
+
+      let isBackCourt = player2.x > W - 300;
+      let hitPower = 0.5;
+
+      if (canSmash) {
+          if (Math.random() < settings.smashProb) hitPower = 0.8; 
+          else hitPower = 0.8; 
+      } 
+      else if (shuttle.y > H - 150) {
+          hitPower = 0.8; 
+      } 
+      else {
+          if (isBackCourt) {
+              hitPower = (Math.random() < 0.7) ? 0.8 : 0.5;
+          } else {
+              if (selectedDifficulty !== 'easy' && Math.random() < 0.4) hitPower = 0.2;
+              else hitPower = 0.5;
+          }
+      }
+      triggerSwing(player2, hitPower);
+      ai.predictedX = null;
+  }
+  
+  // 7. 技能释放
+  if (player2.energy >= 100) {
+      if (ballComing && (Math.abs(shuttle.x - player2.x) > 100 || shuttle.y < 200)) {
+          activateSkill(player2);
+      }
   }
 }
 
@@ -726,11 +848,12 @@ function updateParticles(dt) { for(let i=particles.length-1; i>=0; i--){ let p =
 function createHitParticles(x, y, color, count=12) { for(let i=0; i<count; i++) particles.push({ x: x, y: y, vx: (Math.random()-0.5)*15, vy: (Math.random()-0.5)*15, life: 1.0, color: color }); }
 
 function update(dt){
-    
-  // AI 自动释放技能 (如果满了就放)
+  
+  // 1. 技能按键与倒计时 (保持不变)
+  if (keys['KeyU'] || keys['ShiftLeft']) activateSkill(player); 
   if (gameMode === 'cpu' && player2.energy >= 100) activateSkill(player2);
+  if (gameMode === 'pvp' && (keys['Numpad4'] || keys['Numpad0'])) activateSkill(player2);
 
-  // === 2. 技能状态更新 ===
   [player, player2].forEach(p => {
       if (p.skillActive) {
           p.skillTimer -= dt;
@@ -738,219 +861,112 @@ function update(dt){
       }
   });
 
-  // === 3. 忍者技能特殊效果：时空减速 ===
-  // 如果有人开启了忍者技能，计算一个“时间流速系数”
-  let timeScale = 1.0;
-  if (player.skillActive && player.id === 'ninja') timeScale = 0.5; // P1是忍者开大，P2和球变慢
-  if (player2.skillActive && player2.id === 'ninja') timeScale = 0.5;
+  // 2. 时间流速 (保持不变)
+  let dtP1 = dt, dtP2 = dt, dtBall = dt;
+  if (player.skillActive && player.id === 'ninja') { dtP2 *= 0.5; if (lastHitter === 'player2') dtBall *= 0.5; }
+  if (player2.skillActive && player2.id === 'ninja') { dtP1 *= 0.5; if (lastHitter === 'player') dtBall *= 0.5; }
 
-  // 如果是对方开大，dt 就要乘上 timeScale，让自己变慢
-  // 注意：这个逻辑比较绕。简单的做法是：
-  // 如果 P1 开了时缓，P2 的 dt 变小。
-  
-  let dtP1 = dt;
-  let dtP2 = dt;
-  let dtBall = dt;
+  updateAI(); // 这里面会算出 AI 的 vx 和 vy
 
-  // --- 情况 A: P1 是忍者且开大 ---
-  if (player.skillActive && player.id === 'ninja') { 
-      dtP2 *= 0.5;    // 对手(P2)动作永远变慢
-      
-      // 球的时间流速取决于最后是谁打的
-      // 如果是 P2 打过来的(incoming)，球变慢 -> 忍者容易接
-      // 如果是 P1 打出去的(outgoing)，球保持原速 -> 对手看着很快
-      if (lastHitter === 'player2') dtBall *= 0.5;
-  }
-
-  // --- 情况 B: P2 是忍者且开大 ---
-  if (player2.skillActive && player2.id === 'ninja') { 
-      dtP1 *= 0.5;    // 对手(P1)动作永远变慢
-      
-      // 同理
-      if (lastHitter === 'player') dtBall *= 0.5;
-  }
-
-  updateAI();
-
-  // === 忍者残影记录逻辑 (修改版) ===
+  // 3. 忍者残影 (保持不变)
   [player, player2].forEach(p => {
       if (p.id === 'ninja' && p.skillActive) {
-          // 这里的判断改为简单的帧率控制，避免 Date.now() 的不确定性
-          // 我们给角色加一个临时计数器，如果不存在就初始化
-          if (!p.trailCounter) p.trailCounter = 0;
-          p.trailCounter++;
-
-          // 每 3 帧记录一次残影
+          if (!p.trailCounter) p.trailCounter = 0; p.trailCounter++;
           if (p.trailCounter % 3 === 0) {
-              p.trails.push({
-                  x: p.x, 
-                  y: p.y, 
-                  vx: p.vx,
-                  onGround: p.onGround,
-                  swingAnim: p.swingAnim,
-                  charging: p.charging,
-                  chargeVal: p.chargeVal,
-                  life: 1.0,
-                  // === 关键修改：记录当前的跑步周期 ===
-                  // 这样画出来就是“那一瞬间”的腿部姿态
-                  walkCycle: Date.now() * 0.015 
-              });
+              p.trails.push({ x: p.x, y: p.y, vx: p.vx, onGround: p.onGround, swingAnim: p.swingAnim, charging: p.charging, chargeVal: p.chargeVal, life: 1.0, walkCycle: Date.now() * 0.015 });
           }
       }
-      
-      // 残影生命周期更新
       if (p.trails && p.trails.length > 0) {
-          for (let i = p.trails.length - 1; i >= 0; i--) {
-              p.trails[i].life -= 0.05; 
-              if (p.trails[i].life <= 0) p.trails.splice(i, 1);
-          }
+          for (let i = p.trails.length - 1; i >= 0; i--) { p.trails[i].life -= 0.05; if (p.trails[i].life <= 0) p.trails.splice(i, 1); }
       }
   });
 
-  if(player.charging) player.chargeVal = Math.min(1, player.chargeVal + player.chargeRate * dtP1); // 用 dtP1
-  if(gameMode === 'pvp' && player2.charging) player2.chargeVal = Math.min(1, player2.chargeVal + player2.chargeRate * dtP2); // 用 dtP2
-  
-  // === 移动物理逻辑 (叠加击退效果) ===
-  
-  // --- 第一步：计算水平速度 (vx) ---
-  // 包括：基础移动 + 飞行加速 + 击退叠加
-  
-  // P1 水平逻辑
+  // 蓄力 (保持不变)
+  if(player.charging) player.chargeVal = Math.min(1, player.chargeVal + player.chargeRate * dtP1);
+  if(gameMode === 'pvp' && player2.charging) player2.chargeVal = Math.min(1, player2.chargeVal + player2.chargeRate * dtP2);
+
+  // === 4. 物理更新 P1 ===
   let p1BaseSpeed = player.speed;
-  if (player.skillActive && player.id === 'speed') p1BaseSpeed *= 1.5; // 飞行模式水平加速
-  
-  let p1IntentVx = 0;
-  if (keys['KeyA']) p1IntentVx = -p1BaseSpeed;
-  else if (keys['KeyD']) p1IntentVx = p1BaseSpeed;
-  
-  player.vx = p1IntentVx + (player.impactVx || 0); // 叠加击退
+  if (player.skillActive && player.id === 'speed') p1BaseSpeed *= 1.5;
+  let p1IntentVx = keys['KeyA'] ? -p1BaseSpeed : keys['KeyD'] ? p1BaseSpeed : 0;
+  player.vx = p1IntentVx + (player.impactVx || 0);
 
-  // P2 水平逻辑
-  let p2BaseSpeed = player2.speed;
-  if (player2.skillActive && player2.id === 'speed') p2BaseSpeed *= 1.5;
-
-  let p2IntentVx = 0;
-  if (gameMode === 'pvp') {
-      if (keys['ArrowLeft']) p2IntentVx = -p2BaseSpeed;
-      else if (keys['ArrowRight']) p2IntentVx = p2BaseSpeed;
-  } else {
-      // CPU 模式：如果是飞行状态，稍微加点速
-      p2IntentVx = player2.vx; 
-      if (player2.skillActive && player2.id === 'speed') p2IntentVx *= 1.5;
-  }
-  
-  player2.vx = p2IntentVx + (player2.impactVx || 0); // 叠加击退
-
-  // --- 第二步：击退阻尼 (摩擦力) ---
-  if (player.impactVx) {
-      player.impactVx *= 0.9;
-      if(Math.abs(player.impactVx) < 0.5) player.impactVx = 0;
-  }
-  if (player2.impactVx) {
-      player2.impactVx *= 0.9;
-      if(Math.abs(player2.impactVx) < 0.5) player2.impactVx = 0;
-  }
-
-  // --- 第三步：垂直物理与位置更新 (vy & x/y) ---
-  
-  // P1 垂直逻辑
   if (player.skillActive && player.id === 'speed') {
-      // [飞行模式]
+      // P1 飞行 (WASD控制)
       if (keys['KeyW']) player.vy = -player.speed * 1.2;
       else if (keys['KeyS']) player.vy = player.speed * 1.2;
       else player.vy = 0; 
       player.onGround = false;
       if (Math.random()<0.3) createHitParticles(player.x, player.y+20, '#60a5fa', 1);
   } else {
-      // [普通模式]
       player.vy += worldGravity * dtP1 * 0.9;
   }
-  // 应用位移 (注意：vx 已经在第一步算好了，这里不要再覆盖！)
   player.x += player.vx * dtP1 * 4;
   player.y += player.vy * dtP1 * 4;
 
+  // === 5. 物理更新 P2 (回归原始版本) ===
+  let p2BaseSpeed = player2.speed;
+  if (player2.skillActive && player2.id === 'speed') p2BaseSpeed *= 1.5;
+  
+  let p2IntentVx = 0;
+  if (gameMode === 'pvp') {
+      p2IntentVx = keys['ArrowLeft'] ? -p2BaseSpeed : keys['ArrowRight'] ? p2BaseSpeed : 0;
+  } else {
+      // CPU: vx 已经由 updateAI 决定
+      p2IntentVx = player2.vx; 
+  }
+  player2.vx = p2IntentVx + (player2.impactVx || 0);
 
-  // P2 垂直逻辑
   if (player2.skillActive && player2.id === 'speed') {
       // [飞行模式]
       if (gameMode === 'pvp') {
+          // PVP: 键盘控制 vy
           if (keys['ArrowUp']) player2.vy = -player2.speed * 1.2;
           else if (keys['ArrowDown']) player2.vy = player2.speed * 1.2;
           else player2.vy = 0;
-      } else {
-          // AI 飞行追球
-          if (shuttle.y < player2.y - 50) player2.vy = -player2.speed;
-          else if (shuttle.y > player2.y + 50) player2.vy = player2.speed;
-          else player2.vy = 0;
-      }
+      } 
+      // CPU: 注意！这里不再计算 vy，直接相信 updateAI 的结果
+      // updateAI 已经把 vy 算好放在 player2.vy 里了
+      
       player2.onGround = false;
       if (Math.random()<0.3) createHitParticles(player2.x, player2.y+20, '#60a5fa', 1);
   } else {
       // [普通模式]
       player2.vy += worldGravity * dtP2 * 0.9;
   }
+  
   // 应用位移
   player2.x += player2.vx * dtP2 * 4;
   player2.y += player2.vy * dtP2 * 4;
 
+  // 6. 击退阻尼
+  if (player.impactVx) { player.impactVx *= 0.9; if(Math.abs(player.impactVx) < 0.5) player.impactVx = 0; }
+  if (player2.impactVx) { player2.impactVx *= 0.9; if(Math.abs(player2.impactVx) < 0.5) player2.impactVx = 0; }
 
+  // 7. 地面与边界 (保持不变)
   if(player.y >= H - 40){ player.y = H - 40; player.vy = 0; player.onGround = true; if(player.jumpCount) player.jumpCount=0; }
   if(player2.y >= H - 40){ player2.y = H - 40; player2.vy = 0; player2.onGround = true; if(player2.jumpCount) player2.jumpCount=0; }
   
-  // 发球物理界限锁：发球阶段不能越过 200px 线
   const boundL = COURT_PADDING + 20; const boundR = W - COURT_PADDING - 20;
-  const serviceLineDist = 200;
-  let p1LimitR = W/2 - 50; let p2LimitL = W/2 + 50;
-  
-  
-  if (shuttle.stuck) { 
-      p1LimitR = W/2 - serviceLineDist; 
-      p2LimitL = W/2 + serviceLineDist; 
-  }
-  
-  player.x = clamp(player.x, boundL, p1LimitR); 
-  player2.x = clamp(player2.x, p2LimitL, boundR);
+  const serviceDist = 200; 
+  let p1MaxX = W/2 - 50; let p2MinX = W/2 + 50;
+  if (shuttle.stuck) { p1MaxX = W/2 - serviceDist; p2MinX = W/2 + serviceDist; }
+  player.x = clamp(player.x, boundL, p1MaxX); player2.x = clamp(player2.x, p2MinX, boundR);
 
+  // 8. 挥拍与球物理 (保持不变)
   if(player.swingTimer > 0) player.swingTimer--; if(player2.swingTimer > 0) player2.swingTimer--;
   if(player.swingAnim > 0) player.swingAnim--; if(player2.swingAnim > 0) player2.swingAnim--;
 
   if(!shuttle.stuck){
     const prevX = shuttle.x;
-    // 更新球物理 (用 dtBall -> 球速变慢)
     shuttle.vy += worldGravity * dtBall * 0.8; 
-    // 空气阻力也要受时间流速影响
-    let drag = Math.pow(airDrag, dtBall); 
-    shuttle.vx *= drag; 
-    shuttle.vy *= drag;
-    
-    shuttle.x += shuttle.vx * dtBall; 
-    shuttle.y += shuttle.vy * dtBall;
+    let drag = Math.pow(airDrag, dtBall); shuttle.vx *= drag; shuttle.vy *= drag;
+    shuttle.x += shuttle.vx * dtBall; shuttle.y += shuttle.vy * dtBall;
 
-    const bounceDamping = 0.75; // 反弹力度损耗 (0.75 表示保留 75% 的速度)
-
-    // 1. 天花板反弹
-    if (shuttle.y < 0) {
-        shuttle.y = 0;
-        shuttle.vy = Math.abs(shuttle.vy) * bounceDamping; // 强制向下
-        beep(150, 0.05, 'square'); // 撞墙音效
-        createHitParticles(shuttle.x, 0, '#aaaaaa', 8); // 撞墙灰尘特效
-    }
-
-    // 2. 左墙反弹
-    if (shuttle.x < 0) {
-        shuttle.x = 0;
-        shuttle.vx = Math.abs(shuttle.vx) * bounceDamping; // 强制向右
-        beep(150, 0.05, 'square');
-        createHitParticles(0, shuttle.y, '#aaaaaa', 8);
-    }
-
-    // 3. 右墙反弹
-    if (shuttle.x > W) {
-        shuttle.x = W;
-        shuttle.vx = -Math.abs(shuttle.vx) * bounceDamping; // 强制向左
-        beep(150, 0.05, 'square');
-        createHitParticles(W, shuttle.y, '#aaaaaa', 8);
-    }
+    const bounceDamping = 0.75; 
+    if (shuttle.y < 0) { shuttle.y = 0; shuttle.vy = Math.abs(shuttle.vy) * bounceDamping; beep(150, 0.05, 'square'); createHitParticles(shuttle.x, 0, '#aaaaaa', 8); }
+    if (shuttle.x < 0) { shuttle.x = 0; shuttle.vx = Math.abs(shuttle.vx) * bounceDamping; beep(150, 0.05, 'square'); createHitParticles(0, shuttle.y, '#aaaaaa', 8); }
+    if (shuttle.x > W) { shuttle.x = W; shuttle.vx = -Math.abs(shuttle.vx) * bounceDamping; beep(150, 0.05, 'square'); createHitParticles(W, shuttle.y, '#aaaaaa', 8); }
 
     const netX = W/2; const netTop = H * 0.75; 
     if (Math.abs(shuttle.x - netX) < 10 && shuttle.y > netTop) {
@@ -958,52 +974,24 @@ function update(dt){
         else { shuttle.vx *= -0.2; if(prevX<netX && shuttle.x>netX) shuttle.x=netX-8; if(prevX>netX && shuttle.x<netX) shuttle.x=netX+8; }
     }
     
-    // === 修改：落地判定 (取消出界，只判死活) ===
     if(shuttle.y > H - 10){
-      // 不再判断 inLeft/inRight，只要落地就算分
-      if (shuttle.x < W / 2) {
-          // 落在左边 (P1半场)，P2 得分
-          pointScored('player2', "P2 得分!"); 
-      } else {
-          // 落在右边 (P2半场)，P1 得分
-          pointScored('player', "P1 得分!"); 
-      }
-      return; 
+      if (shuttle.x < W / 2) pointScored('player2', "P2 得分!"); else pointScored('player', "P1 得分!"); return; 
     }
     
-      // Player 1 击球逻辑
     if(collideRacket(player) && player.swingTimer > 0 && !player.hasHit) {
-        // 只有当最后击球的人不是我（是对方或刚开局）时，才能击球
-        if (lastHitter !== 'player') {
-            handleHit(player, 1);
-        }
+        if (lastHitter !== 'player') handleHit(player, 1);
     }
-
-    // Player 2 击球逻辑
     if(collideRacket(player2) && player2.swingTimer > 0 && !player2.hasHit) {
-        // 同理，只有最后击球的人不是 P2 时，P2 才能击球
-        if (lastHitter !== 'player2') {
-            handleHit(player2, -1);
-        }
+        if (lastHitter !== 'player2') handleHit(player2, -1);
     }
-    
-    } else { recalcPositions(); }
-    updateParticles(dt);
-
-
-      // === 新增：同步 HTML 能量条 ===
-    const p1Bar = document.getElementById('p1EBar');
-    const p2Bar = document.getElementById('p2EBar');
-    
-    p1Bar.style.width = player.energy + '%';
-    p2Bar.style.width = player2.energy + '%';
-    
-    // 能量满时添加发光动画 class
-    if(player.energy >= 100) p1Bar.parentElement.classList.add('energy-full');
-    else p1Bar.parentElement.classList.remove('energy-full');
-    
-    if(player2.energy >= 100) p2Bar.parentElement.classList.add('energy-full');
-    else p2Bar.parentElement.classList.remove('energy-full');
+  } else { recalcPositions(); }
+  
+  updateParticles(dtBall);
+  
+  // UI更新 (保持不变)
+  const p1Bar = document.getElementById('p1EBar'); const p2Bar = document.getElementById('p2EBar');
+  if(p1Bar) { p1Bar.style.width = player.energy + '%'; if(player.energy >= 100) p1Bar.parentElement.classList.add('energy-full'); else p1Bar.parentElement.classList.remove('energy-full'); }
+  if(p2Bar) { p2Bar.style.width = player2.energy + '%'; if(player2.energy >= 100) p2Bar.parentElement.classList.add('energy-full'); else p2Bar.parentElement.classList.remove('energy-full'); }
 }
 
 function handleHit(pObj, dir) {
