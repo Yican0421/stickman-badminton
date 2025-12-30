@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>火柴人羽毛球 v3</title>
+  <title>火柴人羽毛球</title>
   <!-- 引入样式文件 -->
   <link rel="stylesheet" href="style.css">
 </head>
@@ -16,12 +16,24 @@
         <div class="mode-opt active" id="optCpu" onclick="setSelectMode('cpu')">单人挑战</div>
         <div class="mode-opt" id="optPvp" onclick="setSelectMode('pvp')">双人对战</div>
     </div>
-    <div class="difficulty-switch" id="diffSelect">
-        <div class="diff-opt" onclick="setDifficulty('easy')">简单</div>
-        <div class="diff-opt active" onclick="setDifficulty('normal')">一般</div>
-        <div class="diff-opt" onclick="setDifficulty('hard')">困难</div>
-        <div class="diff-opt" style="color:#ef4444" onclick="setDifficulty('hell')">疯狗</div>
+
+    <div id="difficultySection">
+        <div style="margin-bottom: 10px; color: #aaa; font-size: 14px; font-weight:bold;">挑战难度</div>
+        <div class="difficulty-switch" id="diffSelect">
+            <div class="diff-opt" onclick="setDifficulty('easy')">简单</div>
+            <div class="diff-opt active" onclick="setDifficulty('normal')">一般</div>
+            <div class="diff-opt" onclick="setDifficulty('hard')">困难</div>
+            <div class="diff-opt" style="color:#ef4444" onclick="setDifficulty('hell')">疯狗</div>
+        </div>
     </div>
+
+    <div style="margin-bottom: 10px; color: #aaa; font-size: 14px; font-weight:bold;">场地大小</div>
+    <div class="map-switch" id="mapSelect">
+        <div class="map-opt" onclick="setMapSize('small')">紧凑</div>
+        <div class="map-opt active" onclick="setMapSize('medium')">标准</div>
+        <div class="map-opt" onclick="setMapSize('large')">宽阔</div>
+    </div>
+
     <div class="selection-area">
         <div class="player-col">
             <div class="col-title" style="color:#ffe5b4">Player 1</div>
@@ -75,8 +87,6 @@
             </button>
         </div>
         
-        <div style="text-align:center; margin-top:5px;"><button id="btnReset">重置</button></div>
-        
         <!-- 游戏消息提示 -->
         <div id="msgBox">扣杀得分!</div>
         
@@ -85,7 +95,7 @@
             <h2 style="color:#fff; margin-bottom:20px; font-size:32px; letter-spacing:4px;">已暂停</h2>
             <div class="menu-btns">
                 <button id="btnResume" class="menu-btn">继续游戏</button>
-                <button id="btnResetInMenu" class="menu-btn">重置本局</button>
+                <button id="btnReset" class="menu-btn">重置本局</button>
                 <button id="btnQuit" class="menu-btn">退出比赛</button>
             </div>
         </div>

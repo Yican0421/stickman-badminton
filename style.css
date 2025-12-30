@@ -228,27 +228,43 @@ button:active { transform: scale(0.95); }
     letter-spacing: 2px;
 }
 
-.mode-switch, .difficulty-switch {
+/* === 菜单按钮统一组布局 === */
+.mode-switch, .difficulty-switch, .map-switch {
     display: flex;
     gap: 8px;
     margin-bottom: 20px;
 }
 
-.mode-opt, .diff-opt {
+/* === 按钮基础样式 (胶囊状) === */
+.mode-opt, .diff-opt, .map-opt {
     padding: 8px 16px;
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 20px;
     font-size: 14px;
     color: #aaa;
     cursor: pointer;
-    transition: 0.2s;
+    transition: all 0.2s; /* 让颜色和缩放都有过渡 */
 }
 
-.mode-opt.active, .diff-opt.active {
+/* === 激活状态 (选中) === */
+/* 保持高亮白底黑字，无视悬停 */
+.mode-opt.active, .diff-opt.active, .map-opt.active {
     background: #fff;
     color: #000;
     font-weight: bold;
     box-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+    transform: scale(1.05); /* 选中时稍微大一点点 */
+    border-color: #fff;
+}
+
+/* === 核心修改：悬停仅对“非”激活项生效 === */
+/* 只有当按钮没有 .active 类时，悬停才会变色 */
+.mode-opt:not(.active):hover, 
+.diff-opt:not(.active):hover, 
+.map-opt:not(.active):hover {
+    background: rgba(255, 255, 255, 0.15); /* 微微发亮 */
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.5);
 }
 
 .selection-area {
@@ -260,6 +276,10 @@ button:active { transform: scale(0.95); }
 }
 
 .player-col {
+    /* === 新增：给左右两栏设定固定的、相同的宽度 === */
+    width: 320px; 
+    /* ========================================= */
+    
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -275,16 +295,21 @@ button:active { transform: scale(0.95); }
 
 .char-grid {
     display: grid;
-    grid-template-columns: 1fr;
+    /* 改为两列，利用横向空间 */
+    grid-template-columns: 1fr 1fr; 
     gap: 10px;
 }
 
 .char-card {
+    /* === 修改：去掉固定宽度，改为 100% 自适应 === */
+    width: 100%;
+    box-sizing: border-box; /* 确保 padding 不会撑破宽度 */
+    /* ======================================= */
+    
     background: rgba(255, 255, 255, 0.05);
     border: 2px solid transparent;
     border-radius: 8px;
     padding: 10px;
-    width: 140px;
     cursor: pointer;
     transition: 0.2s;
     display: flex;
@@ -318,12 +343,16 @@ button:active { transform: scale(0.95); }
 .p2-locked::after {
     content: "CPU (随机)";
     color: #666;
-    font-size: 20px;
+    font-size: 18px;
     font-weight: bold;
     border: 2px dashed #444;
     border-radius: 12px;
-    width: 140px;
-    height: 220px;
+    
+    /* === 修改：宽度跟随父容器 === */
+    width: 80%;
+    height: 100px; 
+    /* ======================== */
+    
     display: flex;
     align-items: center;
     justify-content: center;
@@ -426,13 +455,13 @@ button:active { transform: scale(0.95); }
 }
 
 /* 2. 重置本局 */
-#btnResetInMenu {
+#btnReset {
     background: #000;
     border: 2px solid #fff;
     color: #fff;
 }
 
-#btnResetInMenu:hover {
+#btnReset:hover {
     background: #fff;
     color: #000;
 }
@@ -447,4 +476,35 @@ button:active { transform: scale(0.95); }
 #btnQuit:hover {
     background: #ef4444;
     color: #000;
+}
+
+/* === 新增：场地选择样式 === */
+.map-switch {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+}
+
+.map-opt {
+    padding: 8px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 20px;
+    font-size: 14px;
+    color: #aaa;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.map-opt.active {
+    background: #fff;
+    color: #000;
+    font-weight: bold;
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+}
+
+#difficultySection {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%; /* 确保容器宽度足够，防止挤压 */
 }

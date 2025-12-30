@@ -10,7 +10,7 @@ const CHARACTERS = [
 
 const DIFFICULTY_SETTINGS = {
     easy:   { reaction: 30, error: 80, speedMult: 0.7, smashProb: 0.01, chargeSpeed: 0.8, intercept: false },
-    normal: { reaction: 15, error: 40, speedMult: 1.0, smashProb: 0.15, chargeSpeed: 1.0, intercept: false },
+    normal: { reaction: 15, error: 40, speedMult: 1.0, smashProb: 0.15, chargeSpeed: 1.0, intercept: true },
     hard:   { reaction: 5,  error: 10, speedMult: 1.2, smashProb: 0.50, chargeSpeed: 1.5, intercept: true }, 
     hell:   { reaction: 0,  error: 0,  speedMult: 1.4, smashProb: 0.85, chargeSpeed: 3.0, intercept: true } 
 };
@@ -52,9 +52,23 @@ function setSelectMode(mode) {
     currentMode = mode;
     document.getElementById('optCpu').className = mode==='cpu' ? 'mode-opt active' : 'mode-opt';
     document.getElementById('optPvp').className = mode==='pvp' ? 'mode-opt active' : 'mode-opt';
-    const p2Col = document.getElementById('p2Col'); const diffSelect = document.getElementById('diffSelect');
-    if(mode === 'cpu') { p2Col.classList.add('p2-locked'); diffSelect.style.opacity = '1'; diffSelect.style.pointerEvents = 'auto'; } 
-    else { p2Col.classList.remove('p2-locked'); diffSelect.style.opacity = '0.3'; diffSelect.style.pointerEvents = 'none'; }
+    
+    const p2Col = document.getElementById('p2Col'); 
+    
+    // === 修改这里：获取新的外层容器 ID "difficultySection" ===
+    const diffSection = document.getElementById('difficultySection'); 
+    
+    if(mode === 'cpu') { 
+        // 单人模式：P2锁定，难度区域 变亮 & 可点击
+        p2Col.classList.add('p2-locked'); 
+        diffSection.style.opacity = '1'; 
+        diffSection.style.pointerEvents = 'auto'; 
+    } else { 
+        // 双人模式：P2解锁，难度区域 变暗 & 不可点击
+        p2Col.classList.remove('p2-locked'); 
+        diffSection.style.opacity = '0.3'; 
+        diffSection.style.pointerEvents = 'none'; 
+    }
 }
 function setDifficulty(diff) {
     selectedDifficulty = diff;
@@ -67,6 +81,13 @@ renderCharCards('p1Grid', true); renderCharCards('p2Grid', false); setSelectMode
 
 document.getElementById('btnStartGame').onclick = () => {
     document.getElementById('charSelectScreen').style.display = 'none';
+    
+    // === 新增：应用选中的地图尺寸 ===
+    W = MAP_PRESETS[selectedMapSize].w;
+    H = MAP_PRESETS[selectedMapSize].h;
+    resize(); // 这一步很重要，强制 Canvas 重新适配新的 W 和 H
+    // =============================
+
     let p2FinalChar = p2Selected;
     if(currentMode === 'cpu') { const rand = CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)]; p2FinalChar = rand.id; }
     initGameProps(p1Selected, p2FinalChar);
@@ -77,7 +98,29 @@ document.getElementById('btnStartGame').onclick = () => {
 /* =========================================
    游戏全局变量 (GAME STATE)
    ========================================= */
-let W = 1200, H = 600; let dpr = Math.max(1, window.devicePixelRatio || 1);
+// 默认尺寸 (Medium)
+let W = 1600; 
+let H = 800; 
+let dpr = Math.max(1, window.devicePixelRatio || 1);
+
+// 地图预设
+const MAP_PRESETS = {
+    small:  { w: 1200, h: 600 }, // 紧凑
+    medium: { w: 1400, h: 700 }, // 标准
+    large:  { w: 1600, h: 800 } // 宽阔
+};
+let selectedMapSize = 'medium'; // 默认记录
+
+function setMapSize(size) {
+    selectedMapSize = size;
+    // 更新 UI 样式
+    const opts = document.querySelectorAll('.map-opt');
+    const keys = ['small', 'medium', 'large'];
+    opts.forEach((el, idx) => {
+        if (keys[idx] === size) el.classList.add('active');
+        else el.classList.remove('active');
+    });
+}
 const margin = 100; const MAX_SCORE = 11; const COURT_PADDING = 30; 
 let gameMode = 'cpu'; let serving = 'player'; let lastHitter = 'player';
 let running = false, paused = false, lastTime = 0; let gameOver = false;
@@ -136,15 +179,48 @@ function playSkillSound() {
    ========================================= */
 function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
 
-function resize(){ 
-  const maxW = Math.min(window.innerWidth - 20, 1600); 
-  const availableH = window.innerHeight - 20; 
-  const cssW = Math.max(300, maxW); 
-  const cssH = Math.min(900, Math.max(300, availableH)); 
-  
-  canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px'; canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr); 
-  ctx.setTransform(dpr,0,0,dpr,0,0); W = cssW; H = cssH; recalcPositions(); if(running) draw(); 
+function resize() {
+    // 1. 定义游戏固定的逻辑宽高比 (1200 / 600 = 2:1)
+    const targetRatio = W / H;
+    
+    // 2. 获取浏览器窗口目前的可用宽高
+    const containerW = window.innerWidth - 20; // 留点边距
+    const containerH = window.innerHeight - 20;
+
+    let finalCssW, finalCssH;
+
+    // 3. 计算适应屏幕的最佳 CSS 尺寸 (保持比例，类似 object-fit: contain)
+    if (containerW / containerH > targetRatio) {
+        // 屏幕太宽，以高度为基准
+        finalCssH = containerH;
+        finalCssW = finalCssH * targetRatio;
+    } else {
+        // 屏幕太窄，以宽度为基准
+        finalCssW = containerW;
+        finalCssH = finalCssW / targetRatio;
+    }
+
+    // 4. 应用 CSS 样式尺寸 (视觉大小)
+    canvas.style.width = finalCssW + 'px';
+    canvas.style.height = finalCssH + 'px';
+
+    // 5. 设置 Canvas 内部渲染分辨率 (物理像素，保持清晰度)
+    // 注意：这里永远使用固定的 W(1200) 和 H(600) 乘以 dpr
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+
+    // 6. 调整绘图上下文的缩放，以适配高分屏
+    // 这里的缩放仅用于匹配 DPR，不再用于匹配窗口大小
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // 重点：我们不再修改全局变量 W 和 H！
+    // 这样物理引擎和 AI 永远运行在 1200x600 的世界里，只是画出来的大小变了。
+    
+    // 重新计算一下位置防止某些极端情况（可选）
+    recalcPositions();
+    if (running) draw();
 }
+
 window.addEventListener('resize', resize); resize();
 
 function updateUI(){ 
@@ -278,13 +354,71 @@ window.addEventListener('keyup', e => {
 });
 
 canvas.addEventListener('mousedown', ()=>{ canvas.focus(); if(audioCtx && audioCtx.state==='suspended') audioCtx.resume(); });
-document.getElementById('btnReset').onclick = ()=>{ if(!running) return; player.score=0; player2.score=0; level=1; resetRound(); updateUI(); canvas.focus(); };
 
 /* =========================================
    游戏核心逻辑 (CORE LOGIC)
    ========================================= */
 function startGame(){ if(running) return; running = true; paused = false; lastTime = performance.now(); resetRound(); requestAnimationFrame(loop); }
-function resetRound(){ serving='player'; lastHitter='player'; player.x = margin; player2.x = W - margin; player.y=player2.y=H/2; player.charging=false; player2.charging=false; player.vx=0; player2.vx=0; shuttle.stuck=true; shuttle.vx=shuttle.vy=0; shuttle.isSmash=false; particles = []; if(gameMode === 'cpu') resetAI(); recalcPositions(); }
+
+function resetRound() {
+    serving = 'player';
+    lastHitter = 'player';
+    
+    // 1. 重置位置
+    player.x = margin;
+    player2.x = W - margin;
+    player.y = player2.y = H / 2;
+    player.vx = 0; player.vy = 0;
+    player2.vx = 0; player2.vy = 0;
+
+    // 2. 重置球
+    shuttle.stuck = true;
+    shuttle.vx = shuttle.vy = 0;
+    shuttle.isSmash = false;
+    shuttle.isMeteor = false; // 确保陨石状态也被清除
+    particles = [];
+
+    // 3. === 新增：重置角色状态与能量 ===
+    [player, player2].forEach(p => {
+        p.charging = false;
+        p.chargeVal = 0;
+        p.energy = 0;       // 清空能量
+        p.skillTimer = 0;
+        
+        // 如果技能激活中，强制关闭以恢复属性(速度/大小等)
+        if (p.skillActive) {
+            deactivateSkill(p);
+        }
+        
+        // 再次确保属性完全回退到基准值（防止有漏网之鱼）
+        if (p.baseStats) {
+            p.speed = p.baseStats.speed;
+            p.jumpPower = p.baseStats.jump;
+            p.maxPower = p.baseStats.maxPower;
+            p.smashMult = p.baseStats.smash;
+            p.hitRange = p.baseStats.hitRange;
+        }
+        
+        // 清除特殊状态标记
+        p.shadowClone = false;
+        p.isGiant = false; 
+        p.impactVx = 0;
+    });
+
+    // 4. 重置 AI 与 UI
+    if (gameMode === 'cpu') resetAI();
+    recalcPositions();
+    updateUI(); // 强制更新 UI 移除能量满的特效
+    
+    // 移除能量条满的 CSS 类
+    document.querySelector('.p1-box').classList.remove('energy-full');
+    document.querySelector('.p2-box').classList.remove('energy-full');
+    const p1Bar = document.getElementById('p1EBar');
+    const p2Bar = document.getElementById('p2EBar');
+    if(p1Bar) p1Bar.style.width = '0%';
+    if(p2Bar) p2Bar.style.width = '0%';
+}
+
 function recalcPositions(){ player.x = clamp(player.x, 10, W/2 - 60); player2.x = clamp(player2.x, W/2 + 60, W - 10); if(shuttle.stuck){ if(serving === 'player') { shuttle.x = player.x + 40; shuttle.y = player.y - 70; } else { shuttle.x = player2.x - 40; shuttle.y = player2.y - 70; } } }
 
 function serve(who='player', power=0.5){
@@ -299,7 +433,39 @@ function serve(who='player', power=0.5){
   beep(400 + actualPower*200, 0.1, 'sine');
 }
 
-function pointScored(who, reason=""){ if(reason) showMsg(reason); if(who === 'player') player.score++; else player2.score++; beep(who==='player'?600:200, 0.4, 'square', 0.1); updateUI(); if(player.score >= MAX_SCORE || player2.score >= MAX_SCORE) { gameOver = true; winnerText.textContent = (player.score >= MAX_SCORE ? "玩家 1" : (gameMode==='cpu'?"电脑":"玩家 2")) + " 获胜!"; winnerOverlay.style.display = "flex"; return; } const total = player.score + player2.score; level = 1 + Math.floor(total / 5); serving = who; shuttle.stuck = true; shuttle.vx = shuttle.vy = 0; recalcPositions(); if(gameMode === 'cpu') resetAI(); }
+function pointScored(who, reason="") {
+    if(reason) showMsg(reason);
+    
+    if(who === 'player') player.score++; 
+    else player2.score++; 
+    
+    beep(who==='player'?600:200, 0.4, 'square', 0.1); 
+    updateUI();
+
+    // === 修改：净胜 2 分才算赢 ===
+    const p1 = player.score;
+    const p2 = player2.score;
+    
+    // 判断条件：分数达到 11 且 至少领先对手 2 分
+    const p1Wins = p1 >= MAX_SCORE && (p1 - p2) >= 2;
+    const p2Wins = p2 >= MAX_SCORE && (p2 - p1) >= 2;
+
+    if (p1Wins || p2Wins) {
+        gameOver = true;
+        winnerText.textContent = (p1Wins ? "玩家 1" : (gameMode==='cpu'?"电脑":"玩家 2")) + " 获胜!";
+        winnerOverlay.style.display = "flex";
+        return;
+    }
+    // ============================
+
+    const total = player.score + player2.score; 
+    level = 1 + Math.floor(total / 5); 
+    serving = who; 
+    shuttle.stuck = true; 
+    shuttle.vx = shuttle.vy = 0; 
+    recalcPositions(); 
+    if(gameMode === 'cpu') resetAI(); 
+}
 
 function activateSkill(p) {
     if (p.energy < 100 || p.skillActive) return; 
@@ -342,9 +508,19 @@ function resetAI() {
   ai.predictedX = null; ai.interceptY = null; ai.willOut = false; 
   ai.reactionTimer = 0; ai.errorOffset = 0; ai.recalcTimer = 0; ai.serveDelay = 0; 
   const serviceLineDist = 200; const netX = W / 2;
-  let isFrontServe = Math.random() < 0.3;
-  if (isFrontServe) ai.serveTargetX = netX + serviceLineDist + 10 + Math.random() * 50; 
-  else ai.serveTargetX = W - 100 - Math.random() * 100; 
+  // === 修改发球站位逻辑：完全随机 ===
+
+  // 计算合法站位区间
+  // 起点 (minX)：中网 + 200px (发球线) + 20px (稍微往后站一点点，不踩线)
+  const minX = netX + serviceLineDist + 10;
+  
+  // 终点 (maxX)：最右侧 - 60px (保留一点身位，不贴墙)
+  const maxX = W - 60;
+
+  // 在区间内完全随机选择一个点
+  ai.serveTargetX = minX + Math.random() * (maxX - minX);
+
+  // ==============================
   player2.charging = false; player2.chargeVal = 0;
 }
 
@@ -395,7 +571,31 @@ function updateAI(){
       } 
       player2.vx = 0; 
       const distToNet = Math.abs(player2.x - W/2);
-      let servePower = 0.8; if (distToNet < 200) servePower = 0.25; else servePower = (Math.random() < 0.4) ? 0.6 : 0.9;
+      let servePower = 0.5; 
+      if (distToNet < 250) {
+          if (Math.random() < 0.7) {
+              servePower = 0.25 + Math.random() * 0.1; // 0.25~0.35 (极轻)
+          } else {
+              servePower = 0.85 + Math.random() * 0.15; // 0.85~1.0 (偷后场)
+          }
+      } 
+      // 情况 B: 站位靠后 (中后场)
+      // 策略：必须保证过网，距离越远，基础力度越大
+      else {
+          // 计算一个“安全下限”
+          // 逻辑：距离 250px 时至少需要 0.5 力度，距离 800px 时至少需要 0.9 力度
+          // 线性插值公式
+          let minSafePower = 0.5 + ((distToNet - 250) / 600) * 0.5;
+          
+          // 限制最大值为 0.95 (留点余地)
+          if (minSafePower > 0.95) minSafePower = 0.95;
+
+          // 最终力度 = 安全下限 + 随机波动
+          servePower = minSafePower + Math.random() * (1.0 - minSafePower);
+      }
+      
+      // 再次兜底，防止算出奇怪的数值
+      servePower = clamp(servePower, 0.2, 1.0);
       player2.swingAnim = 10; serve('player2', servePower); resetAI(); return; 
   }
   const isMyTurn = lastHitter !== 'player2';
@@ -411,12 +611,26 @@ function updateAI(){
                   if (Math.random() < settings.smashProb) { target = traj.intercept.x; ai.interceptY = traj.intercept.y; }
               }
               let maxError = settings.error; ai.errorOffset = (Math.random() - 0.5) * maxError;
-              ai.predictedX = target + ai.errorOffset; ai.recalcTimer = 0;
+              ai.predictedX = target + ai.errorOffset; ai.recalcTimer = 0; if (ai.predictedX === null) { ai.reactionTimer = settings.reaction; };
           }
       }
   } else { ai.predictedX = ai.baseX; ai.interceptY = null; }
 
   let moveTarget = ai.predictedX;
+
+  if (ai.reactionTimer > 0) {
+      ai.reactionTimer--;
+      if (!player2.onGround) {
+          // 不做任何操作，保留上一帧的 vx
+      } 
+      // 2. 如果在地面，模拟"急停/发呆"的摩擦力，而不是瞬间静止
+      else {
+          player2.vx *= 0.8; // 快速但平滑地减速
+          if (Math.abs(player2.vx) < 0.1) player2.vx = 0;
+      }
+      return; // 直接跳过后面的移动和击球逻辑，这一帧 AI "短路"了
+  }
+
   if (moveTarget !== null) {
       if (ai.interceptY !== null) moveTarget += 15;
       moveTarget = clamp(moveTarget, W/2 + 40, W - 40);
@@ -448,12 +662,15 @@ function updateAI(){
   if (shuttle.x > W/2 && distToBall < hitRange && !shuttle.stuck && isMyTurn) {
       let isHighEnough = shuttle.y < (H * 0.5); let canSmash = isHighEnough && !player2.onGround;
       if (player2.skillActive && player2.id === 'speed') canSmash = true;
-      let isBackCourt = player2.x > W - 300; let hitPower = 0.5;
+      let isBackCourt = player2.x > W - 300; let hitPower = 0.5; let distToNet = Math.abs(player2.x - W/2);
       if (canSmash) { if (Math.random() < 0.8) hitPower = 0.8; else hitPower = 0.2; } 
       else if (shuttle.y > H - 150) { hitPower = 0.8; } 
       else {
           if (isBackCourt) { hitPower = (Math.random() < 0.7) ? 0.8 : 0.5; } 
-          else { if (selectedDifficulty !== 'easy' && Math.random() < 0.4) hitPower = 0.2; else hitPower = 0.5; }
+          else { 
+              let safeToDrop = (distToNet < 250);
+              if (selectedDifficulty !== 'easy' && safeToDrop && Math.random() < 0.4) { hitPower = 0.3; } else { hitPower = 0.5; }
+          }
       }
       triggerSwing(player2, hitPower); ai.predictedX = null;
   }
@@ -550,7 +767,7 @@ function update(dt){
     if (shuttle.x < 0) { shuttle.x = 0; shuttle.vx = Math.abs(shuttle.vx) * bounceDamping; beep(150, 0.05, 'square'); createHitParticles(0, shuttle.y, '#aaaaaa', 8); }
     if (shuttle.x > W) { shuttle.x = W; shuttle.vx = -Math.abs(shuttle.vx) * bounceDamping; beep(150, 0.05, 'square'); createHitParticles(W, shuttle.y, '#aaaaaa', 8); }
 
-    const netX = W/2; const netTop = H * 0.75; 
+    const netX = W/2; const netTop = H - 200; 
     if (Math.abs(shuttle.x - netX) < 10 && shuttle.y > netTop) {
         if (shuttle.y < netTop + 15) { shuttle.vy = -Math.abs(shuttle.vy)*0.7-2; shuttle.vx*=-0.5; shuttle.x = (shuttle.x<netX)?netX-12:netX+12; beep(200,0.05,'triangle',0.15); } 
         else { shuttle.vx *= -0.2; if(prevX<netX && shuttle.x>netX) shuttle.x=netX-8; if(prevX>netX && shuttle.x<netX) shuttle.x=netX+8; }
@@ -588,7 +805,7 @@ function handleHit(pObj, dir) {
     if (distToNet > 250) smashSpeed *= (1 + (distToNet - 250) / 400); 
     let netProximity = Math.max(0.2, 1 - (distToNet / 400));
     let desiredVy = 8 + (netProximity * 18) + (power * 5);
-    const netSafeHeight = H * 0.75 - 20;
+    const netSafeHeight = (H - 200) - 20;
     let avgVx = smashSpeed * 0.95; let timeToNet = distToNet / avgVx;
     let maxVyAllowed = (netSafeHeight - shuttle.y) / timeToNet - (0.5 * worldGravity * timeToNet);
     if (desiredVy > maxVyAllowed) { desiredVy = maxVyAllowed; if (desiredVy < 2) { desiredVy = 2; smashSpeed *= 1.2; } }
@@ -616,7 +833,7 @@ function togglePause() {
 }
 document.getElementById('btnPause').onclick = () => { togglePause(); document.getElementById('btnPause').blur(); };
 document.getElementById('btnResume').onclick = togglePause;
-document.getElementById('btnResetInMenu').onclick = () => { player.score = 0; player2.score = 0; level = 1; resetRound(); updateUI(); togglePause(); };
+document.getElementById('btnReset').onclick = () => { player.score = 0; player2.score = 0; level = 1; resetRound(); updateUI(); togglePause(); };
 document.getElementById('btnQuit').onclick = () => { 
         // 1. 停止游戏循环 (关键)
         running = false; 
@@ -656,7 +873,7 @@ function drawCourt(){
     ctx.beginPath(); ctx.moveTo(W/2 - 200, H-10); ctx.lineTo(W/2 - 200, H-40); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(W/2 + 200, H-10); ctx.lineTo(W/2 + 200, H-40); ctx.stroke(); ctx.setLineDash([]);
 }
-function drawNet(){ const netTop = H*0.75; ctx.fillStyle='rgba(255,255,255,0.1)'; ctx.fillRect(W/2-4,netTop,8,H-netTop); }
+function drawNet(){ const netTop = H - 200; ctx.fillStyle='rgba(255,255,255,0.1)'; ctx.fillRect(W/2-4,netTop,8,H-netTop); }
 function drawParticles() { for(let p of particles){ ctx.globalAlpha = p.life; ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI*2); ctx.fill(); } ctx.globalAlpha = 1; }
 function drawShuttle() {
     if (shuttle.y < -20) {
@@ -724,6 +941,13 @@ function drawStickman(d, isPlayer, isGhost = false) {
     }
 
     const cx = d.x; const headR = 12; const bodyBottom = d.y - 30; const bodyTop = d.y - 80; const groundY = d.y; const color = d.color; const facingDir = isPlayer ? 1 : -1; 
+
+    if (d.skillActive && d.id === 'ninja' && !isGhost) {
+            // 呼吸光晕
+            const glowSize = 20 + Math.sin(Date.now() * 0.015) * 10; 
+            ctx.shadowBlur = glowSize;
+            ctx.shadowColor = '#00ff99'; // 荧光绿
+        }
 
     if (d.skillActive && d.id === 'speed' && !isGhost) {
         ctx.save(); ctx.translate(cx, bodyTop + 20); 
